@@ -1,0 +1,90 @@
+﻿@page
+@model AppRazor.Pages.ViewFriendModel
+@{
+    ViewData["Title"] = "View friend";
+}
+
+@if (Model?.Friend == null)
+{
+    <div class="alert alert-danger" role="alert">
+        Friend not found.
+    </div>
+    return;
+}
+
+<!-- Page view-group -->
+<div class="container px-4 py-4" id="view-friend">
+    <h2 class="pb-2 border-bottom">
+    View details of a friend
+        <a href="~/Friends/EditFriend?id=@Model.Friend.FriendId">
+            <svg class="bi text-body-secondary flex-shrink-0 me-3" width="1.75em" height="1.75em"><use xlink:href="#edit" /></svg>
+        </a>
+    </h2>
+    <form class="needs-validation" novalidate>
+        <div class="row row-cols-1 row-cols-lg-4 align-items-stretch g-4 py-5">
+            <div class="col-md-7 col-lg-10">
+
+                <div class="row g-3">
+                    <div class="col-sm-6">
+                        <label for="Name" class="form-label">Friend Name</label>
+                        <input type="text" class="form-control" id="Name" value="@Model.Friend.FirstName @Model.Friend.LastName" readonly>
+                    </div>
+
+                    <div class="col-sm-6">
+                        <label for="adress" class="form-label">Country</label>
+                        <input type="text" class="form-control" id="address" value="@(Model.Friend?.Address?.Country ?? "N/A")" readonly>
+                    </div>
+
+                    <div class="col-sm-6">
+                        <label for="adress" class="form-label">City</label>
+                        <input type="text" class="form-control" id="address" value="@(Model.Friend?.Address?.City ?? "N/A")" readonly>
+                    </div>
+
+                    <div class="col-sm-6">
+                        <label for="birthday" class="form-label">Birthday</label>
+                        <input type="text" class="form-control" id="birthday" value="@Model.Friend.Birthday.ToString()" readonly>
+                    </div>
+                </div>
+                <div class="row g-1">
+                    <h3 class="pb-2">Pets</h3>
+
+                    <div class="row mb-2 text-center">
+                        <div class="col-md-10 themed-grid-head-col">Name</div>
+                        <div class="col-md-2 themed-grid-head-col">Kind</div>
+                    </div>
+                    @if (Model.Friend.Pets != null)
+                    {
+                        @foreach (var item in Model.Friend.Pets)
+                        {
+                        <div class="row mb-2 text-center">
+                            <div class="col-md-10 themed-grid-col">@item.Name</div>
+                            <div class="col-md-2 themed-grid-col">@item.Kind</div>
+                        </div>
+                        }
+                    }
+                </div>
+
+                <div class="row g-1">
+                    <h3 class="pb-2">Favourite Quotes</h3>
+
+                    <div class="row mb-2 text-center">
+                        <div class="col-md-10 themed-grid-head-col">Quote</div>
+                        <div class="col-md-2 themed-grid-head-col">Author</div>
+                    </div>
+                    @if (Model.Friend.Quotes != null)
+                    {
+                        @foreach (var item in Model.Friend.Quotes)
+                        {
+                        <div class="row mb-2 text-center">
+                            <div class="col-md-10 themed-grid-col">@item.QuoteText</div>
+                            <div class="col-md-2 themed-grid-col">@item.Author</div>
+                        </div>
+                        }
+                    }
+                </div>
+
+            </div>
+        </div>
+    </form>
+</div>
+
