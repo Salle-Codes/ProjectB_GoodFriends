@@ -18,20 +18,21 @@ namespace AppRazor.Pages
         readonly IFriendsService _friend_service = null;
         readonly IPetsService _pet_service = null;
         readonly IQuotesService _quote_service = null;
+        readonly IAddressesService _address_service = null;
         readonly ILogger<EditFriendModel> _logger = null;
 
         //InputModel (IM) is locally declared classes that contains ONLY the properties of the Model
         //that are bound to the <form> tag
         //EVERY property must be bound to an <input> tag in the <form>
         [BindProperty]
-        public FriendIM FriendInput { get; set; }
+        public FriendIM? FriendInput { get; set; }
 
         //I also use BindProperty to keep between several posts, bound to hidden <input> field
         [BindProperty]
         public string PageHeader { get; set; }
 
         //For Validation
-        public ModelValidationResult ValidationResult { get; set; } = new ModelValidationResult(false, null, null);
+        public ModelValidationResult ValidationResult { get; set; } = new ModelValidationResult(false, Enumerable.Empty<string>(), Enumerable.Empty<KeyValuePair<string, Microsoft.AspNetCore.Mvc.ModelBinding.ModelStateEntry>>());
 
         #region HTTP Requests
         public async Task<IActionResult> OnGet()
@@ -60,8 +61,19 @@ namespace AppRazor.Pages
 
         public IActionResult OnPostDeletePet(Guid petId)
         {
-            //Set the Pet as deleted, it will not be rendered
-            FriendInput.Pets.First(p => p.PetId == petId).StatusIM = StatusIM.Deleted;
+            //Find the pet to delete
+            var pet = FriendInput.Pets.First(p => p.PetId == petId);
+            
+            //If it was just inserted (never saved to DB), remove it from the list entirely
+            if (pet.StatusIM == StatusIM.Inserted)
+            {
+                FriendInput.Pets.Remove(pet);
+            }
+            else
+            {
+                //Otherwise mark it as deleted so it will be removed from DB
+                pet.StatusIM = StatusIM.Deleted;
+            }
 
             return Page();
         }
@@ -122,8 +134,19 @@ namespace AppRazor.Pages
 
         public IActionResult OnPostDeleteQuote(Guid quoteId)
         {
-            //Set the Quote as deleted, it will not be rendered
-            FriendInput.Quotes.First(q => q.QuoteId == quoteId).StatusIM = StatusIM.Deleted;
+            //Find the quote to delete
+            var quote = FriendInput.Quotes.First(q => q.QuoteId == quoteId);
+            
+            //If it was just inserted (never saved to DB), remove it from the list entirely
+            if (quote.StatusIM == StatusIM.Inserted)
+            {
+                FriendInput.Quotes.Remove(quote);
+            }
+            else
+            {
+                //Otherwise mark it as deleted so it will be removed from DB
+                quote.StatusIM = StatusIM.Deleted;
+            }
 
             return Page();
         }
@@ -195,55 +218,74 @@ namespace AppRazor.Pages
         {
             string[] keys = { "FriendInput.FirstName",
                               "FriendInput.LastName",
-                              "FriendInput.Birthday"};
-
+                              "FriendInput.Birthday",
+                              "FriendInput.Address.StreetAddress",
+                              "FriendInput.Address.ZipCode",
+                              "FriendInput.Address.City",
+                              "FriendInput.Address.Country"};
             if (!ModelState.IsValidPartially(out ModelValidationResult validationResult, keys))
             {
                 ValidationResult = validationResult;
                 return Page();
             }
 
-            //This is where the music plays
-            //First, are we creating a new Friend or editing another
-            if (FriendInput.StatusIM == StatusIM.Inserted)
+            // Save or update address first
+            var addressDto = FriendInput.Address.ToCUdto();
+            ResponseItemDto<IAddress> addressResp;
+            if (FriendInput.Address.AddressId == Guid.Empty)
             {
-                var newFriend = await _friend_service.CreateFriendAsync(FriendInput.CreateCUdto());
-                //get the newly created FriendId
-                FriendInput.FriendId = newFriend.Item.FriendId;
+                addressResp = await _address_service.CreateAddressAsync(addressDto);
+            }
+            else
+            {
+                addressDto.AddressId = FriendInput.Address.AddressId;
+                addressResp = await _address_service.UpdateAddressAsync(addressDto);
             }
 
-            //Do all updates for Pets
+            // Set AddressId on FriendCuDto
+            var friendDto = FriendInput.ToCUdto();
+            friendDto.AddressId = addressResp.Item?.AddressId ?? Guid.Empty;
+
+            // Check if creating new friend or updating existing one
+            ResponseItemDto<IFriend> friendResp;
+            if (FriendInput.StatusIM == StatusIM.Inserted)
+            {
+                // Create new friend
+                friendResp = await _friend_service.CreateFriendAsync(friendDto);
+                FriendInput.FriendId = friendResp.Item.FriendId;
+            }
+            else
+            {
+                // Update existing friend
+                friendResp = await _friend_service.UpdateFriendAsync(friendDto);
+            }
+
+            // Save pets and quotes changes
             await SavePets();
+            await SaveQuotes();
 
-            // Do all updates for Quotes
-            var friend = await SaveQuotes();
-
-            //Finally, update the Friend itself
-            friend = FriendInput.UpdateModel(friend);
-            await _friend_service.UpdateFriendAsync(new FriendCuDto(friend));
-
-            if (FriendInput.StatusIM == StatusIM.Inserted)
-            {
-                return Redirect($"~/Friends/Overview");
-            }
-
-            return Redirect($"~/Friends/ViewFriend?id={FriendInput.FriendId}");
+            return RedirectToPage("/Friends/Overview");
         }
         #endregion
 
         #region InputModel Pets and Quotes saved to database
         private async Task<IFriend> SavePets()
         {
+            // Read the current state from database first
+            var currentFriend = await _friend_service.ReadFriendAsync(FriendInput.FriendId, false);
+            var existingPetIds = currentFriend.Item.Pets?.Select(p => p.PetId).ToHashSet() ?? new HashSet<Guid>();
+
             //Check if there are deleted pets, if so simply remove them
             var deletedPets = FriendInput.Pets.FindAll(p => (p.StatusIM == StatusIM.Deleted));
             foreach (var item in deletedPets)
             {
-                //Remove from the database
-                await _pet_service.DeletePetAsync(item.PetId);
+                // Only try to delete if it actually exists in the database
+                if (existingPetIds.Contains(item.PetId))
+                {
+                    //Remove from the database
+                    await _pet_service.DeletePetAsync(item.PetId);
+                }
             }
-
-            //Note that now the deleted pets will be removed and I can focus on Pet creation
-            await _friend_service.ReadFriendAsync(FriendInput.FriendId, false);
 
             //Check if there are any new pets added, if so create them in the database
             var newPets = FriendInput.Pets.FindAll(p => (p.StatusIM == StatusIM.Inserted));
@@ -278,12 +320,20 @@ namespace AppRazor.Pages
         }
         private async Task<IFriend> SaveQuotes()
         {
+            // Read the current state from database first
+            var currentFriend = await _friend_service.ReadFriendAsync(FriendInput.FriendId, false);
+            var existingQuoteIds = currentFriend.Item.Quotes?.Select(q => q.QuoteId).ToHashSet() ?? new HashSet<Guid>();
+
             //Check if there are deleted quotes, if so simply remove them
             var deletedQuotes = FriendInput.Quotes.FindAll(q => (q.StatusIM == StatusIM.Deleted));
             foreach (var item in deletedQuotes)
             {
-                //Remove from the database
-                await _quote_service.DeleteQuoteAsync(item.QuoteId);
+                // Only try to delete if it actually exists in the database
+                if (existingQuoteIds.Contains(item.QuoteId))
+                {
+                    //Remove from the database
+                    await _quote_service.DeleteQuoteAsync(item.QuoteId);
+                }
             }
 
             //Check if there are any new quotes added, if so create them in the database
@@ -325,11 +375,12 @@ namespace AppRazor.Pages
         #region Constructors
         //Inject services just like in WebApi
         public EditFriendModel(IFriendsService friend_service, IPetsService pet_service,
-                              IQuotesService quote_service, ILogger<EditFriendModel> logger)
+                              IQuotesService quote_service, IAddressesService address_service, ILogger<EditFriendModel> logger)
         {
             _friend_service = friend_service;
             _pet_service = pet_service;
             _quote_service = quote_service;
+            _address_service = address_service;
             _logger = logger;
         }
         #endregion
@@ -455,13 +506,18 @@ namespace AppRazor.Pages
         {
             public Guid AddressId { get; set; }
 
-            public string StreetAddress { get; set; }
+            [Required(ErrorMessage = "You must provide a street address")]
+            public string StreetAddress { get; set; } = string.Empty;
 
+            [Required(ErrorMessage = "You must provide a zip code")]
+            [Range(1, int.MaxValue, ErrorMessage = "Zip code must be a positive number")]
             public int ZipCode { get; set; }
 
-            public string City { get; set; }
+            [Required(ErrorMessage = "You must provide a city")]
+            public string City { get; set; } = string.Empty;
 
-            public string Country { get; set; }
+            [Required(ErrorMessage = "You must provide a country")]
+            public string Country { get; set; } = string.Empty;
 
             public AddressIM() { }
             
@@ -476,6 +532,18 @@ namespace AppRazor.Pages
                     Country = model.Country;
                 }
             }
+
+            public AddressCuDto ToCUdto()
+            {
+                return new AddressCuDto
+                {
+                    AddressId = null,
+                    StreetAddress = this.StreetAddress,
+                    ZipCode = this.ZipCode,
+                    City = this.City,
+                    Country = this.Country
+                };
+            }
         }
 
         public class FriendIM
@@ -485,21 +553,21 @@ namespace AppRazor.Pages
             public Guid FriendId { get; set; }
 
             [Required(ErrorMessage = "You must provide a first name")]
-            public string FirstName { get; set; }
+            public string FirstName { get; set; } = string.Empty;
 
             [Required(ErrorMessage = "You must provide a last name")]
-            public string LastName { get; set; }
+            public string LastName { get; set; } = string.Empty;
 
             [Required(ErrorMessage = "You must provide a birthday")]
             public DateTime Birthday { get; set; }
-            public AddressIM Address { get; set; }
+            public AddressIM Address { get; set; } = new AddressIM();
 
             public List<QuoteIM> Quotes { get; set; } = new List<QuoteIM>();
             public List<PetIM> Pets { get; set; } = new List<PetIM>();
 
             public FriendIM() 
             {
-                Address = new AddressIM();
+
             }
             public FriendIM(IFriend model)
             {
@@ -539,7 +607,25 @@ namespace AppRazor.Pages
             public QuoteIM NewQuote { get; set; } = new QuoteIM();
 
             //to allow a new pet being specified and bound in the form
-            public PetIM NewPet { get; set; } = new PetIM();         
+            public PetIM NewPet { get; set; } = new PetIM();
+
+            // Add this method to convert FriendIM to FriendCuDto
+            public FriendCuDto ToCUdto()
+            {
+                return new FriendCuDto
+                {
+                    FriendId = this.FriendId != Guid.Empty ? this.FriendId : null,
+                    FirstName = this.FirstName,
+                    LastName = this.LastName,
+                    Birthday = this.Birthday,
+                    AddressId = this.Address?.AddressId != Guid.Empty ? this.Address?.AddressId : null,
+                    // Include current pets and quotes IDs to preserve them during update
+                    PetsId = this.Pets?.Where(p => p.StatusIM != StatusIM.Deleted && p.StatusIM != StatusIM.Inserted)
+                                      .Select(p => p.PetId).ToList(),
+                    QuotesId = this.Quotes?.Where(q => q.StatusIM != StatusIM.Deleted && q.StatusIM != StatusIM.Inserted)
+                                          .Select(q => q.QuoteId).ToList()
+                };
+            }
         }
         #endregion
     }
